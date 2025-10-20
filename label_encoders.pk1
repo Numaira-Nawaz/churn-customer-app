@@ -1,0 +1,13 @@
+from sklearn.preprocessing import LabelEncoder
+import joblib
+
+categorical_cols = ['gender','Partner','Dependents','Contract','PaymentMethod','InternetService']  # replace with your categorical columns
+label_encoders = {}
+
+for col in categorical_cols:
+    le = LabelEncoder()
+    le.fit(df[col].astype(str))  # df = your original training dataframe
+    label_encoders[col] = le
+
+joblib.dump(label_encoders, "label_encoders.pkl")
+print("✅ label_encoders.pkl created successfully")
