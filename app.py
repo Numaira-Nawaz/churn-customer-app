@@ -97,42 +97,54 @@ st.markdown("""
         padding: 8px 12px;
     }
     .big-prob { font-size:20px; font-weight:600 }
+    .input-card { background:#0f1724; padding:16px; border-radius:12px; box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+    .label { color:#9AA0A6; font-size:12px }
+    .result-card { padding:16px; border-radius:10px; color:white; font-weight:700 }
+    .result-success { background: linear-gradient(90deg,#0ea5a4,#059669); }
+    .result-danger { background: linear-gradient(90deg,#ef4444,#b91c1c); }
+    .small-muted { color:#9AA0A6; font-size:12px }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar.expander("Customer details", expanded=True):
     # Use mild defaults; try to infer options from encoders if available
     def options_for(col, default):
+        # Force user-friendly options for common binary fields
+        if col == 'gender':
+            return ["Female", "Male"]
+        if col == 'SeniorCitizen':
+            return ["No", "Yes"]
+        if col in ('Partner', 'Dependents'):
+            return ["Yes", "No"]
+        # Otherwise try to infer from saved encoders, falling back to defaults
         if col in label_encoders:
-            # reverse map classes_ to use in selectboxes
             try:
                 classes = list(label_encoders[col].classes_)
-                return classes
+                # Prefer human-readable classes if present
+                cls_str = [str(c).strip() for c in classes]
+                return cls_str
             except Exception:
                 return default
         return default
 
+    st.markdown("<div class='input-card'>", unsafe_allow_html=True)
+    st.markdown("<div style='display:flex;justify-content:space-between;align-items:center'><div><strong>Customer Inputs</strong></div><div class='small-muted'>Fill required fields</div></div>", unsafe_allow_html=True)
     gender_choice = st.radio("Gender", options_for('gender', ["Female", "Male"]))
     st.caption("Note: Female = 0, Male = 1 (display only)")
-    senior = st.selectbox("Senior Citizen", [0, 1])
+    senior = st.selectbox("Senior Citizen", options_for('SeniorCitizen', ["No", "Yes"]))
     partner = st.selectbox("Has Partner?", options_for('Partner', ["Yes", "No"]))
     dependents = st.selectbox("Has Dependents?", options_for('Dependents', ["Yes", "No"]))
     tenure = st.slider("Tenure (months)", 0, 72, 12)
-    monthly_charges = st.number_input("Monthly Charges", min_value=0.0, max_value=10000.0, value=70.0)
-    total_charges = st.number_input("Total Charges", min_value=0.0, max_value=100000.0, value=2000.0)
+    monthly_charges = st.number_input("Monthly Charges", min_value=0.0, max_value=10000.0, value=70.0, format="%.2f")
+    total_charges = st.number_input("Total Charges", min_value=0.0, max_value=100000.0, value=2000.0, format="%.2f")
     contract = st.selectbox("Contract", options_for('Contract', ["Month-to-month", "One year", "Two year"]))
     payment_method = st.selectbox("Payment Method", options_for('PaymentMethod', ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]))
     internet_service = st.selectbox("Internet Service", options_for('InternetService', ["DSL", "Fiber optic", "No"]))
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# Prepare input values; keep gender as string if encoder exists, otherwise map Female->0, Male->1
-gender_value = gender_choice
-if 'gender' not in label_encoders:
-    # map to numeric
-    gender_map = {"female": 0, "male": 1}
-    gender_value = gender_map.get(str(gender_choice).strip().lower(), 0)
-
+# Prepare input values: keep human-readable strings (Yes/No, Female/Male). Preprocess will convert them if model expects numeric.
 input_df = pd.DataFrame([{ 
-    "gender": gender_value,
+    "gender": gender_choice,
     "SeniorCitizen": senior,
     "Partner": partner,
     "Dependents": dependents,
@@ -182,6 +194,49 @@ with col2:
 
 def preprocess(df):
     df_proc = df.copy()
+    # Normalize UI-friendly values into canonical strings/numbers before encoding
+    # Map SeniorCitizen: 'Yes'/'No' -> 1/0
+    if 'SeniorCitizen' in df_proc.columns:
+        df_proc['SeniorCitizen'] = df_proc['SeniorCitizen'].map({"Yes": 1, "No": 0}).fillna(df_proc['SeniorCitizen'])
+    # Map binary text fields for Partner/Dependents
+    for col in ['Partner', 'Dependents']:
+        if col in df_proc.columns:
+            df_proc[col] = df_proc[col].map({"Yes": "Yes", "No": "No", 1: "Yes", 0: "No"}).fillna(df_proc[col])
+    # Normalize gender as 'Female'/'Male' strings; encoders (if present) will handle mapping
+    if 'gender' in df_proc.columns:
+        df_proc['gender'] = df_proc['gender'].astype(str).map(lambda x: x.title() if isinstance(x, str) else x)
+
+    # If label encoders exist and expect numeric '0'/'1' (or ints), map human-friendly inputs to those classes
+    def _map_human_to_encoder(col_name, yes_is_one=True):
+        if col_name not in df_proc.columns or col_name not in label_encoders:
+            return
+        le = label_encoders[col_name]
+        classes = list(getattr(le, 'classes_', []))
+        if not classes:
+            return
+        cls_str = [str(c).strip().lower() for c in classes]
+        # if encoder already uses human labels, skip mapping
+        if any(s in ('female','male','yes','no') for s in cls_str):
+            return
+        # if encoder classes look like '0'/'1' or 0/1, map human inputs accordingly
+        if '0' in cls_str and '1' in cls_str:
+            target_is_int = all(isinstance(c, int) for c in classes)
+            def map_val(v):
+                s = str(v).strip().lower()
+                if s in ('female','f'):
+                    return 0 if target_is_int else '0'
+                if s in ('male','m'):
+                    return 1 if target_is_int else '1'
+                if s in ('yes','y'):
+                    return 1 if target_is_int else '1'
+                if s in ('no','n'):
+                    return 0 if target_is_int else '0'
+                return v
+            df_proc[col_name] = df_proc[col_name].map(map_val).fillna(df_proc[col_name])
+
+    # Apply mapping for common columns
+    for col in ['gender', 'Partner', 'Dependents']:
+        _map_human_to_encoder(col)
     # If training wrote a feature order, use it to guarantee exact ordering & length
     if TRAIN_FEATURE_ORDER is not None:
         feature_order = TRAIN_FEATURE_ORDER
@@ -275,10 +330,11 @@ if st.button("🔍 Predict Churn"):
             proba = model.predict_proba(X_input)[0][1]
             # show probability with progress bar and card
             pct = int(proba * 100)
+            # Styled result card
             if proba >= 0.5:
-                st.error(f"⚠️ Predicted: CHURN — probability = {proba:.2%}")
+                st.markdown(f"<div class='result-card result-danger'>⚠️ Predicted: CHURN — {proba:.2%}</div>", unsafe_allow_html=True)
             else:
-                st.success(f"✅ Predicted: STAY — probability of churn = {proba:.2%}")
+                st.markdown(f"<div class='result-card result-success'>✅ Predicted: STAY — churn prob {proba:.2%}</div>", unsafe_allow_html=True)
             st.progress(pct)
             st.markdown(f"<div class='big-prob'>Probability: {proba:.2%}</div>", unsafe_allow_html=True)
             with st.expander('Feature order used for model'):
