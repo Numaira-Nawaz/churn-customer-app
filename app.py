@@ -110,12 +110,19 @@ with st.sidebar.expander("Customer details", expanded=True):
     # Use mild defaults; try to infer options from encoders if available
     def options_for(col, default):
         # Force user-friendly options for common binary fields
+        # Force user-friendly options for common binary and categorical fields
         if col == 'gender':
             return ["Female", "Male"]
         if col == 'SeniorCitizen':
             return ["No", "Yes"]
         if col in ('Partner', 'Dependents'):
             return ["Yes", "No"]
+        if col == 'PaymentMethod':
+            return ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"]
+        if col == 'Contract':
+            return ["Month-to-month", "One year", "Two year"]
+        if col == 'InternetService':
+            return ["DSL", "Fiber optic", "No"]
         # Otherwise try to infer from saved encoders, falling back to defaults
         if col in label_encoders:
             try:
@@ -206,36 +213,58 @@ def preprocess(df):
         df_proc['gender'] = df_proc['gender'].astype(str).map(lambda x: x.title() if isinstance(x, str) else x)
 
     # If label encoders exist and expect numeric '0'/'1' (or ints), map human-friendly inputs to those classes
-    def _map_human_to_encoder(col_name, yes_is_one=True):
+    def _map_human_to_encoder(col_name, preferred_labels=None):
+        """Map human-friendly labels in df_proc[col_name] to the classes expected by label_encoders[col_name].
+        preferred_labels is a list of labels in the preferred human order (e.g., ["Month-to-month","One year","Two year"]).
+        """
         if col_name not in df_proc.columns or col_name not in label_encoders:
             return
         le = label_encoders[col_name]
         classes = list(getattr(le, 'classes_', []))
         if not classes:
             return
-        cls_str = [str(c).strip().lower() for c in classes]
-        # if encoder already uses human labels, skip mapping
-        if any(s in ('female','male','yes','no') for s in cls_str):
+        # Normalize classes to strings for comparison
+        cls_str = [str(c).strip() for c in classes]
+        # If encoder already stores human labels, do nothing
+        if preferred_labels is None:
+            preferred_labels = []
+        # If encoder classes intersect preferred labels, assume encoder uses human labels
+        if any(pl in cls_str for pl in preferred_labels):
             return
-        # if encoder classes look like '0'/'1' or 0/1, map human inputs accordingly
-        if '0' in cls_str and '1' in cls_str:
-            target_is_int = all(isinstance(c, int) for c in classes)
-            def map_val(v):
-                s = str(v).strip().lower()
-                if s in ('female','f'):
-                    return 0 if target_is_int else '0'
-                if s in ('male','m'):
-                    return 1 if target_is_int else '1'
-                if s in ('yes','y'):
-                    return 1 if target_is_int else '1'
-                if s in ('no','n'):
-                    return 0 if target_is_int else '0'
+        # Otherwise, attempt to map by index: find index of selected preferred label and map to classes[index]
+        def map_by_index(v):
+            try:
+                sval = str(v).strip()
+                if sval in preferred_labels:
+                    idx = preferred_labels.index(sval)
+                    if idx < len(classes):
+                        return classes[idx]
+                # handle Yes/No mapping
+                low = sval.lower()
+                if low in ('yes','y') and 'Yes' in preferred_labels:
+                    idx = preferred_labels.index('Yes')
+                    return classes[idx] if idx < len(classes) else v
+                if low in ('no','n') and 'No' in preferred_labels:
+                    idx = preferred_labels.index('No')
+                    return classes[idx] if idx < len(classes) else v
+            except Exception:
                 return v
-            df_proc[col_name] = df_proc[col_name].map(map_val).fillna(df_proc[col_name])
+            return v
+        df_proc[col_name] = df_proc[col_name].map(map_by_index).fillna(df_proc[col_name])
 
-    # Apply mapping for common columns
-    for col in ['gender', 'Partner', 'Dependents']:
-        _map_human_to_encoder(col)
+    # Preferred human label orders for mapping
+    preferred_map = {
+        'gender': ["Female", "Male"],
+        'SeniorCitizen': ["No", "Yes"],
+        'Partner': ["Yes", "No"],
+        'Dependents': ["Yes", "No"],
+        'PaymentMethod': ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"],
+        'Contract': ["Month-to-month", "One year", "Two year"],
+        'InternetService': ["DSL", "Fiber optic", "No"]
+    }
+
+    for col, prefs in preferred_map.items():
+        _map_human_to_encoder(col, prefs)
     # If training wrote a feature order, use it to guarantee exact ordering & length
     if TRAIN_FEATURE_ORDER is not None:
         feature_order = TRAIN_FEATURE_ORDER
