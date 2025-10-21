@@ -65,6 +65,18 @@ if os.path.exists(FEATURE_ORDER_FILE):
     except Exception:
         TRAIN_FEATURE_ORDER = None
 
+# If the training feature order wasn't saved but the model contains feature names, try to recover them.
+if TRAIN_FEATURE_ORDER is None and model is not None:
+    try:
+        # XGBoost sklearn wrapper stores booster with feature names
+        if hasattr(model, 'get_booster'):
+            booster = model.get_booster()
+            fn = getattr(booster, 'feature_names', None)
+            if fn:
+                TRAIN_FEATURE_ORDER = list(fn)
+    except Exception:
+        TRAIN_FEATURE_ORDER = None
+
 st.markdown("""
 <div style='display:flex;align-items:center;gap:12px'>
     <div style='font-size:36px'>📞</div>
@@ -228,6 +240,37 @@ if st.button("🔍 Predict Churn"):
         st.error("No model available to make predictions. Train first with `python train.py --data path/to/data.csv`.")
     else:
         try:
+            # Pre-prediction diagnostic: check feature shape vs model expectation
+            provided_count = X_input.shape[1]
+            expected_count = None
+            if TRAIN_FEATURE_ORDER is not None:
+                expected_count = len(TRAIN_FEATURE_ORDER)
+            else:
+                # attempt to infer from model if possible
+                try:
+                    if hasattr(model, 'n_features_in_'):
+                        expected_count = int(getattr(model, 'n_features_in_'))
+                except Exception:
+                    expected_count = None
+
+            if expected_count is not None and provided_count != expected_count:
+                st.warning(f"Feature shape mismatch detected: expected {expected_count}, got {provided_count}")
+                # show which features are missing if we have TRAIN_FEATURE_ORDER
+                if TRAIN_FEATURE_ORDER is not None:
+                    provided_names = list(input_df.columns)
+                    missing = [f for f in TRAIN_FEATURE_ORDER if f not in provided_names]
+                    if missing:
+                        st.info("Missing features will be filled with 0 by default:")
+                        st.write(missing)
+                        # pad input_df with missing columns
+                        for m in missing:
+                            input_df[m] = 0
+                        # re-run preprocess to rebuild X_input
+                        X_input, feature_order = preprocess(input_df)
+                        provided_count = X_input.shape[1]
+                else:
+                    st.info("No feature_order available to compute missing feature names. Consider retraining or providing 'feature_order.txt'.")
+
             pred = model.predict(X_input)[0]
             proba = model.predict_proba(X_input)[0][1]
             # show probability with progress bar and card
