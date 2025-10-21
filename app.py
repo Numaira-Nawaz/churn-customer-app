@@ -130,7 +130,6 @@ with st.sidebar.expander("Customer details", expanded=True):
     st.markdown("<div class='input-card'>", unsafe_allow_html=True)
     st.markdown("<div style='display:flex;justify-content:space-between;align-items:center'><div><strong>Customer Inputs</strong></div><div class='small-muted'>Fill required fields</div></div>", unsafe_allow_html=True)
     gender_choice = st.radio("Gender", options_for('gender', ["Female", "Male"]))
-    st.caption("Note: Female = 0, Male = 1 (display only)")
     senior = st.selectbox("Senior Citizen", options_for('SeniorCitizen', ["No", "Yes"]))
     partner = st.selectbox("Has Partner?", options_for('Partner', ["Yes", "No"]))
     dependents = st.selectbox("Has Dependents?", options_for('Dependents', ["Yes", "No"]))
